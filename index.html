@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nexoria - Load Cell Kalibrasyon İstasyonu</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography,aspect-ratio,line-clamp"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 font-sans antialiased min-h-screen flex flex-col justify-between">
 
@@ -65,7 +65,6 @@
                 <p class="text-[11px] text-center text-gray-500 italic">Komut USB kablo üzerinden seri port protokolüyle anlık iletilir.</p>
             </div>
         </div>
-
     </main>
 
     <footer class="p-4 border-t border-gray-900 text-center text-xs text-gray-600">
@@ -77,51 +76,49 @@
         let reader;
         let inputString = "";
 
-        // Tarayıcı üzerinden USB Portunu Açma
         async function seriPortBaglan() {
             if ("serial" in navigator) {
                 try {
-                    // Kullanıcıdan USB Port seçmesini iste
                     port = await navigator.serial.requestPort();
-                    await port.open({ baudRate: 115200 });
+                    
+                    // GÜNCELLEME: Port açma parametrelerini genişlettik (Buffer hatasını engeller)
+                    await port.open({ 
+                        baudRate: 115200,
+                        bufferSize: 255 
+                    });
                     
                     document.getElementById('portDurum').className = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-semibold";
                     document.getElementById('portDurum').innerText = "Bağlandı (115200 Baud)";
                     document.getElementById('btnBaglan').innerText = "🔌 Port Açık";
 
-                    // Gelen verileri arka planda sürekli oku
                     seriVeriOku();
                 } catch (err) {
-                    alert("Port bağlantısı kurulamadı veya iptal edildi, kral: " + err);
+                    alert("Port açma hatası kral: " + err);
                 }
             } else {
-                alert("Kral, kullandığın tarayıcı Web Serial API desteklemiyor. Chrome veya Edge kullanmanı tavsiye ederim!");
+                alert("Tarayıcın Web Serial desteklemiyor kral. Chrome veya Edge kullan!");
             }
         }
 
-        // ESP32'den USB ile Gelen Verileri Yakalama
         async function seriVeriOku() {
-            while (port.readable) {
-                const textDecoder = new TextDecoderStream();
-                const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
-                reader = textDecoder.readable.getReader();
-
+            while (port && port.readable) {
                 try {
+                    const textDecoder = new TextDecoderStream();
+                    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                    reader = textDecoder.readable.getReader();
+
                     while (true) {
                         const { value, done } = await reader.read();
                         if (done) break;
                         
                         if (value) {
                             inputString += value;
-                            // Satır sonu karakterini ara (\n)
                             if (inputString.includes("\n")) {
                                 let satirlar = inputString.split("\n");
-                                // En son tam bitmemiş satırı havuzda tut, öncekileri işle
                                 inputString = satirlar.pop(); 
                                 
                                 satirlar.forEach(satir => {
                                     satir = satir.trim();
-                                    // Örnek gelen veri şablonu: "KILO:12.45|RAW:154200"
                                     if(satir.startsWith("KILO:")) {
                                         let parcalar = satir.split("|");
                                         let kiloDegeri = parcalar[0].replace("KILO:", "");
@@ -136,34 +133,35 @@
                     }
                 } catch (error) {
                     console.error("Seri veri okuma hatası:", error);
+                    break;
                 } finally {
-                    reader.releaseLock();
+                    if(reader) { reader.releaseLock(); }
                 }
             }
         }
 
-        // Web Sitesinden USB Kablosuyla ESP32'ye Yazı/Komut Gönderme
         async function komutGonder(komutMetni) {
             if (port && port.writable) {
-                const textEncoder = new TextEncoderStream();
-                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-                const writer = textEncoder.writable.getWriter();
-
-                await writer.write(komutMetni + "\n");
-                await writer.close();
+                try {
+                    const encoder = new TextEncoder();
+                    const writer = port.writable.getWriter();
+                    // Komutun sonuna satır sonu ekleyerek ham dizi olarak gönderiyoruz
+                    await writer.write(encoder.encode(komutMetni + "\n"));
+                    writer.releaseLock();
+                } catch (hata) {
+                    console.error("Veri gönderme hatası:", hata);
+                }
             } else {
                 alert("Önce üst taraftan 'Kantara Bağlan' butonuna basarak USB bağlantısını açmalısın kral!");
             }
         }
 
-        // Kalibrasyon Hesaplama Komutunu Tetikleme
         function kalibrasyonTetikle() {
             const kgVal = parseFloat(document.getElementById('testKilo').value);
             if (!kgVal || kgVal <= 0) {
                 alert("Lütfen kantara koyduğun test nesnesinin kilosunu doğruca gir kral!");
                 return;
             }
-            // ESP32'ye "KALIBRE:5.00" gibi bir veri fırlatıyoruz
             komutGonder("KALIBRE:" + kgVal);
             alert("Kalibrasyon sinyali gönderildi! ESP32 katsayıyı hesaplayıp kaydedecek.");
         }
