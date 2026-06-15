@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexoria - Load Cell Kalibrasyon İstasyonu</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 font-sans antialiased min-h-screen flex flex-col justify-between">
+
+    <header class="bg-gray-900 border-b border-gray-800 p-5 shadow-xl">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-amber-400 tracking-wider">NEXORIA HARDWARE LAB</h1>
+            <div class="flex items-center gap-4">
+                <button id="btnBaglan" onclick="seriPortBaglan()" class="bg-amber-500 hover:bg-amber-400 text-gray-950 font-black px-5 py-2 rounded-xl text-sm transition shadow-lg shadow-amber-500/10">
+                    🔌 Kantara Bağlan (USB)
+                </button>
+                <span id="portDurum" class="bg-red-500/10 text-red-400 border border-red-500/30 px-3 py-1 rounded-full text-xs font-semibold">
+                    Bağlantı Yok
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-4 py-8 grid grid-cols-1 md:grid-cols-2 gap-8 flex-grow">
+        
+        <div class="space-y-6">
+            <div class="bg-gray-900 p-8 rounded-3xl border border-gray-800 shadow-2xl flex flex-col items-center justify-center text-center relative overflow-hidden">
+                <span class="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-2">HX711 CANLI ÖLÇÜM</span>
+                <div class="text-7xl font-black text-white tracking-tight font-mono my-4">
+                    <span id="canliAgirlik">0.00</span> <span class="text-3xl text-amber-400">Kg</span>
+                </div>
+                <div class="text-xs text-gray-400 mt-2 font-mono" id="hamDegerOkunan">Ham Değer (Raw): 0</div>
+            </div>
+
+            <div class="bg-gray-900 p-6 rounded-2xl border border-gray-800 shadow-xl">
+                <h2 class="text-lg font-bold text-gray-200 mb-1">1. Denge Noktası (Dara)</h2>
+                <p class="text-xs text-gray-400 mb-4">Kantarın üstü tamamen boşken basın. Hazneyi veya kantar mekanizmasının kendi ağırlığını sıfırlar.</p>
+                <button onclick="komutGonder('DARA')" class="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-xl border border-gray-700 transition active:scale-95">
+                    Kantarı Sıfırla (Dara Al) 🔄
+                </button>
+            </div>
+        </div>
+
+        <div class="bg-gray-900 p-6 rounded-2xl border border-gray-800 shadow-xl flex flex-col justify-between">
+            <div>
+                <h2 class="text-lg font-bold text-amber-400 mb-1">2. Gerçek Ağırlık Eşleme (Kalibrasyon)</h2>
+                <p class="text-xs text-gray-400 mb-6">Kantara gerçek ağırlığını tam olarak bildiğiniz bir test nesnesi yerleştirin.</p>
+                
+                <div class="space-y-4 bg-gray-950 p-5 rounded-xl border border-gray-800">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Test Nesnesinin Kilosu</label>
+                        <div class="flex gap-3">
+                            <input type="number" step="0.01" id="testKilo" placeholder="Örn: 5.00" class="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-lg font-bold text-white focus:outline-none focus:border-amber-500 transition">
+                            <span class="text-gray-400 font-bold text-lg self-center">KG</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 space-y-3">
+                <button onclick="kalibrasyonTetikle()" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-black py-4 rounded-xl text-base transition active:scale-95 shadow-lg shadow-amber-600/10">
+                    🎯 Katsayıyı Hesapla ve ESP32'yi Kalibre Et
+                </button>
+                <p class="text-[11px] text-center text-gray-500 italic">Komut USB kablo üzerinden seri port protokolüyle anlık iletilir.</p>
+            </div>
+        </div>
+
+    </main>
+
+    <footer class="p-4 border-t border-gray-900 text-center text-xs text-gray-600">
+        Nexoria Agro Core Hardware Lab Automation Tools © 2026
+    </footer>
+
+    <script>
+        let port;
+        let reader;
+        let inputString = "";
+
+        // Tarayıcı üzerinden USB Portunu Açma
+        async function seriPortBaglan() {
+            if ("serial" in navigator) {
+                try {
+                    // Kullanıcıdan USB Port seçmesini iste
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 115200 });
+                    
+                    document.getElementById('portDurum').className = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-semibold";
+                    document.getElementById('portDurum').innerText = "Bağlandı (115200 Baud)";
+                    document.getElementById('btnBaglan').innerText = "🔌 Port Açık";
+
+                    // Gelen verileri arka planda sürekli oku
+                    seriVeriOku();
+                } catch (err) {
+                    alert("Port bağlantısı kurulamadı veya iptal edildi, kral: " + err);
+                }
+            } else {
+                alert("Kral, kullandığın tarayıcı Web Serial API desteklemiyor. Chrome veya Edge kullanmanı tavsiye ederim!");
+            }
+        }
+
+        // ESP32'den USB ile Gelen Verileri Yakalama
+        async function seriVeriOku() {
+            while (port.readable) {
+                const textDecoder = new TextDecoderStream();
+                const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        
+                        if (value) {
+                            inputString += value;
+                            // Satır sonu karakterini ara (\n)
+                            if (inputString.includes("\n")) {
+                                let satirlar = inputString.split("\n");
+                                // En son tam bitmemiş satırı havuzda tut, öncekileri işle
+                                inputString = satirlar.pop(); 
+                                
+                                satirlar.forEach(satir => {
+                                    satir = satir.trim();
+                                    // Örnek gelen veri şablonu: "KILO:12.45|RAW:154200"
+                                    if(satir.startsWith("KILO:")) {
+                                        let parcalar = satir.split("|");
+                                        let kiloDegeri = parcalar[0].replace("KILO:", "");
+                                        let rawDegeri = parcalar[1] ? parcalar[1].replace("RAW:", "") : "0";
+
+                                        document.getElementById('canliAgirlik').innerText = kiloDegeri;
+                                        document.getElementById('hamDegerOkunan').innerText = "Ham Değer (Raw): " + rawDegeri;
+                                    }
+                                });
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Seri veri okuma hatası:", error);
+                } finally {
+                    reader.releaseLock();
+                }
+            }
+        }
+
+        // Web Sitesinden USB Kablosuyla ESP32'ye Yazı/Komut Gönderme
+        async function komutGonder(komutMetni) {
+            if (port && port.writable) {
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                const writer = textEncoder.writable.getWriter();
+
+                await writer.write(komutMetni + "\n");
+                await writer.close();
+            } else {
+                alert("Önce üst taraftan 'Kantara Bağlan' butonuna basarak USB bağlantısını açmalısın kral!");
+            }
+        }
+
+        // Kalibrasyon Hesaplama Komutunu Tetikleme
+        function kalibrasyonTetikle() {
+            const kgVal = parseFloat(document.getElementById('testKilo').value);
+            if (!kgVal || kgVal <= 0) {
+                alert("Lütfen kantara koyduğun test nesnesinin kilosunu doğruca gir kral!");
+                return;
+            }
+            // ESP32'ye "KALIBRE:5.00" gibi bir veri fırlatıyoruz
+            komutGonder("KALIBRE:" + kgVal);
+            alert("Kalibrasyon sinyali gönderildi! ESP32 katsayıyı hesaplayıp kaydedecek.");
+        }
+    </script>
+</body>
+</html>
